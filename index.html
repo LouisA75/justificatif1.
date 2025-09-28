@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Cache-Control" content="no-store, max-age=0, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Vue sécurisée (15s)</title>
+  <style>
+    html, body { background:#111; margin:0; }
+    #s { padding:10px; font:14px system-ui; color:#999; }
+    #cv { max-width:100%; background:#000; display:block; margin:auto; user-select:none; }
+    body, html, * { user-select: none !important; -webkit-user-select:none; }
+    /* Empêche le drag */
+    #cv { pointer-events: none; }
+  </style>
+</head>
+<body>
+<div id="s"></div>
+<canvas id="cv"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/openpgp/5.11.2/openpgp.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.js";
+</script>
+<script>
+(async()=>{
+  const S=m=>document.getElementById('s').textContent=m;
+
+  // Bloquer contextuel partout
+  document.addEventListener('contextmenu',e=>e.preventDefault());
+  // Bloquer selection et drag
+  document.addEventListener('selectstart',e=>e.preventDefault());
+  document.addEventListener('dragstart',e=>e.preventDefault());
+  // Bloquer copier/coller
+  document.addEventListener('copy',e=>e.preventDefault());
+  document.addEventListener('cut',e=>e.preventDefault());
+  document.addEventListener('paste',e=>e.preventDefault());
+
+  // Bloquer raccourcis stockage/impression/capture d'écran
+  document.addEventListener('keydown',e=>{
+    const k=e.key.toLowerCase();
+    if((e.ctrlKey||e.metaKey)&&(k==='s'||k==='p'||k==='c')) e.preventDefault(); // Save/Print/Copy
+    if(k==='printscreen' || k==='snapshot') { // PrintScreen
+      S('Capture écran bloquée!');
+      setTimeout(()=>{ S('Affichage temporaire. Fermeture automatique dans 15 s…'); },2000);
+      e.preventDefault();
+    }
+    // Autres raccourcis de capture (macOS)
+    if(e.metaKey && e.shiftKey && (k==='4'||k==='3')) { // Cmd+Shift+4/3
+      S('Capture écran bloquée!');
+      setTimeout(()=>{ S('Affichage temporaire. Fermeture automatique dans 15 s…'); },2000);
+      e.preventDefault();
+    }
+  });
+
+  // Flouter/détruire si la fenêtre perd le focus
+  window.addEventListener('blur',()=>{
+    const cv=document.getElementById('cv');
+    cv.width=1; cv.height=1; S('Affichage suspendu. Recharger la page.');
+    setTimeout(()=>{ window.close(); location.replace('about:blank'); },1000);
+  });
+
+  // Jeton unique dans l’URL (exemple, à compléter côté serveur)
+  // let params=new URLSearchParams(location.search);
+  // let token=params.get('token');
+  // if(!token || token!=="TOKEN_ATTENDU"){ S('Lien expiré ou invalide'); return; }
+
+  // Demande du mot de passe
+  const pass=prompt('🔐 Mot de passe du fichier .gpg :');
+  if(!pass){ S('Annulé'); return; }
+
+  try{
+    // Charger le .gpg (reste chiffré sur le serveur)
+    const r=await fetch('/secure/encrypted.pdf.gpg',{cache:'no-store'});
+    if(!r.ok) throw Error('HTTP '+r.status);
+    const enc=new Uint8Array(await r.arrayBuffer());
+    // Déchiffrer en mémoire
+    const msg=await openpgp.readMessage({binaryMessage:enc});
+    const {data}=await openpgp.decrypt({message:msg,passwords:[pass],format:'binary'});
+    enc.fill(0);
+
+    // Afficher la 1ère page
+    const pdf=await pdfjsLib.getDocument({data:new Uint8Array(data),disableFontFace:true}).promise;
+    const page=await pdf.getPage(1);
+    const cv=document.getElementById('cv');
+    const ctx=cv.getContext('2d',{alpha:false});
+    const vp=page.getViewport({scale:1.5});
+    cv.width=vp.width; cv.height=vp.height;
+    await page.render({canvasContext:ctx,viewport:vp}).promise;
+
+    // Message + auto-destruction de la vue en 15 s
+    S('Affichage temporaire. Fermeture automatique dans 15 s…');
+    setTimeout(()=>{
+      try{ cv.width=1; cv.height=1; }catch(_){}
+      window.close(); location.replace('about:blank');
+    },15000);
+  }catch(e){
+    S('Erreur : '+e.message);
+  }
+})();
+</script>
+</body>
+</html>
