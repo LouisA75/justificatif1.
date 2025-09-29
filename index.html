@@ -7,142 +7,170 @@
 <meta http-equiv="Expires" content="0">
 <title>Vue sécurisée (15s)</title>
 <style>
-  html, body { background:#111; margin:0; height:100%; width:100%; overflow:hidden; }
-  body { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
-  #s { padding:10px; font:16px system-ui; color:#999; text-align:center; }
-  #cv { max-width:100%; background:#000; display:block; margin:auto; user-select:none; pointer-events:none; }
-  #login {margin-bottom:20px;}
-  input[type="password"] {
-    padding:7px; font-size:1em; border-radius:5px; border:1px solid #444; background:#222; color:#fff; outline:none;
-  }
-  button {padding:7px 14px; font-size:1em; border-radius:5px; border:none; background:#2a5; color:#fff; cursor:pointer;}
-  button:disabled {background:#444;cursor:not-allowed;}
-  .hidden {display:none;}
+  html, body { background:#0b0b0b; margin:0; height:100%; width:100%; overflow:hidden; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
+  #status { font:14px system-ui; color:#bbb; text-align:left; width:min(960px,92vw); white-space:pre-wrap; }
+  #msg    { font:16px system-ui; color:#66c; width:min(960px,92vw); text-align:center; }
+  #cv     { max-width:100%; background:#000; display:block; margin:0 auto; user-select:none; pointer-events:none; }
   #overlay, #blocker {
-    position:fixed; top:0; left:0; width:100vw; height:100vh;
-    background:rgba(0,0,0,0.88); color:#fff; display:flex; align-items:center; justify-content:center;
-    font-size:1.3em; z-index:1000; transition:opacity 0.2s; text-align:center;
-    pointer-events: none;
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.9); color:#fff; z-index:1000; text-align:center; padding:20px;
+    font:16px system-ui;
   }
+  #blocker { background:rgba(0,0,0,.94); z-index:1100; display:none; }
+  #login { display:flex; gap:8px; align-items:center; }
+  input[type="password"]{
+    padding:8px; font:16px system-ui; border-radius:6px; border:1px solid #444; background:#161616; color:#fff;
+  }
+  button{ padding:8px 14px; font:16px system-ui; border-radius:6px; border:0; background:#2a5; color:white; cursor:pointer; }
+  button:disabled{ background:#3a3a3a; cursor:not-allowed; }
+  .hidden{ display:none; }
 </style>
 </head>
 <body>
-<div id="s"></div>
+
+<div id="msg">Document confidentiel — fermeture automatique après déchiffrement.</div>
+
 <div id="login">
-  <label for="pw">Mot de passe OpenPGP&nbsp;:</label>
+  <label for="pw" style="color:#ddd">Mot de passe OpenPGP :</label>
   <input type="password" id="pw" autocomplete="off" autofocus>
-  <button id="btn" disabled>Déchiffrer le document</button>
+  <button id="go" disabled>Déchiffrer</button>
 </div>
+
 <canvas id="cv"></canvas>
-<div id="overlay">Veuillez entrer le mot de passe pour déchiffrer le document</div>
-<div id="blocker" class="hidden"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/openpgp/5.11.2/openpgp.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.js"></script>
+<pre id="status"></pre>
+
+<div id="overlay">Veuillez entrer le mot de passe pour déchiffrer le document…</div>
+<div id="blocker"></div>
+
+<!-- Librairies -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/openpgp/5.11.2/openpgp.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.js" crossorigin="anonymous"></script>
 <script>
-pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.js";
+/*** CONFIG ***/
+const GPG_URL  = "secure/encrypted.pdf.gpg";     // ← ADAPTE si ton fichier a un autre nom
+const CLOSE_MS = 15000;                          // 15 secondes d'affichage
 
-// --- Chemin relatif vers ton fichier gpg ---
-const GPG_URL = "secure/encrypted.pdf.gpg";
-const S = m => document.getElementById('s').textContent = m;
-const blocker = document.getElementById('blocker');
-const overlay = document.getElementById('overlay');
-const cv = document.getElementById('cv');
+/*** PDF.js worker ***/
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.js";
 
-// Champ mot de passe et bouton
-const pw = document.getElementById('pw');
-const btn = document.getElementById('btn');
+/*** UI helpers ***/
+const $ = sel => document.querySelector(sel);
+const S = (t)  => { $("#msg").textContent = t; };
+const L = (t)  => { console.log(t); const s=$("#status"); s.textContent += (s.textContent? "\n":"") + t; };
+const showBlock = (txt,ms=1600)=>{ const b=$("#blocker"); b.textContent=txt; b.style.display="flex"; setTimeout(()=>b.style.display="none",ms); };
+const hardClose = ()=>{ try{ const cv=$("#cv"); cv.width=1; cv.height=1; }catch{} window.close(); location.replace("about:blank"); };
 
-// Activation du bouton
-pw.addEventListener('input',()=>btn.disabled = !pw.value);
+/*** Anti-actions (découragement fort) ***/
+const killEvent = (e, why) => { e.preventDefault(); e.stopPropagation(); showBlock(why); };
+["contextmenu","copy","cut","paste","selectstart","dragstart","drag","drop"].forEach(ev=>{
+  addEventListener(ev, e=>killEvent(e,"Action interdite"), true);
+});
+addEventListener("keydown", e=>{
+  const k=(e.key||"").toLowerCase();
+  const combo = (e.ctrlKey||e.metaKey);
+  if (k==="f12" || k==="printscreen" || (e.metaKey && e.shiftKey && (k==="3"||k==="4"||k==="5")) ||
+      (combo && (k==="s"||k==="p"||k==="o"||k==="c"||k==="x"||k==="v"))) {
+    killEvent(e, "Raccourci bloqué"); hardClose();
+  }
+}, true);
+addEventListener("beforeprint", ()=>{ L("beforeprint → fermeture"); hardClose(); }, true);
+addEventListener("afterprint",  ()=>{ L("afterprint  → fermeture"); hardClose(); }, true);
+addEventListener("visibilitychange", ()=>{ if (document.hidden){ L("onglet masqué → fermeture"); hardClose(); } }, true);
+addEventListener("blur", ()=>{ L("perte de focus → fermeture"); hardClose(); }, true);
 
-// Protection (appliquée **après** déchiffrement)
-function activateProtection() {
-  // Bloquer souris
-  ['mousedown','mouseup','click','dblclick','contextmenu','wheel','mousemove','mouseenter','mouseleave','mouseover','mouseout','drag','drop'].forEach(ev=>{
-    document.body.addEventListener(ev,e=>{
-      e.stopPropagation(); e.preventDefault();
-      blocker.textContent = "Action souris interdite"; blocker.classList.remove('hidden');
-      setTimeout(()=>blocker.classList.add('hidden'), 1800);
-    }, true);
-  });
-  // Bloquer clavier
-  document.addEventListener('keydown',e=>{
-    e.preventDefault(); blocker.textContent = "Clavier désactivé"; blocker.classList.remove('hidden');
-    setTimeout(()=>blocker.classList.add('hidden'), 1800);
-  }, true);
-  // Bloquer copier/coller/sélection/drag partout
-  ['copy','cut','paste','selectstart','dragstart'].forEach(ev=>{
-    document.addEventListener(ev,e=>{e.preventDefault();blocker.textContent="Action interdite";blocker.classList.remove('hidden');setTimeout(()=>blocker.classList.add('hidden'),1800);}, true);
-  });
-  // Bloquer accès au menu contextuel partout
-  document.addEventListener('contextmenu',e=>{e.preventDefault();blocker.textContent="Menu contextuel interdit";blocker.classList.remove('hidden');setTimeout(()=>blocker.classList.add('hidden'),1800);}, true);
-  // Floutage/déconnexion si focus perdu
-  window.addEventListener('blur',()=>{
-    S('Affichage suspendu. Recharger la page.');
-    cv.width = 1; cv.height = 1;
-    overlay.textContent = "Session fermée (perte de focus)";
-    overlay.classList.remove('hidden');
-    setTimeout(()=>{ window.close(); location.replace('about:blank'); }, 900);
-  });
+/*** Login boutons ***/
+const pw = $("#pw"); const go = $("#go"); const overlay=$("#overlay");
+pw.addEventListener("input", ()=> go.disabled = !pw.value);
+go.addEventListener("click", decryptAndShow);
+
+/*** Pipeline avec logs précis ***/
+async function decryptAndShow(){
+  go.disabled = true; overlay.classList.add("hidden");
+  S("Étape 1/6 – Récupération du .gpg…"); L(`[1] fetch ${GPG_URL}`);
+  let enc;
+  try{
+    const r = await fetch(GPG_URL, { cache:"no-store", headers:{ "Cache-Control":"no-store,private,max-age=0" } });
+    L(`[1] HTTP ${r.status}`);
+    if(!r.ok) throw new Error(`Téléchargement impossible (HTTP ${r.status}) — chemin invalide ?`);
+    enc = new Uint8Array(await r.arrayBuffer());
+    L(`[1] Taille chiffrée: ${enc.byteLength} octets`);
+  }catch(err){
+    S("Erreur de chargement du fichier chiffré."); L(`[ERR-LOAD] ${err.stack||err}`);
+    go.disabled = false; overlay.classList.remove("hidden"); return;
+  }
+
+  S("Étape 2/6 – Lecture du message OpenPGP…"); L("[2] openpgp.readMessage(binaryMessage)");
+  let msg;
+  try{
+    msg = await openpgp.readMessage({ binaryMessage: enc });
+  }catch(err){
+    S("Le fichier n'est pas un paquet OpenPGP valide."); L(`[ERR-PARSE] ${err.stack||err}`);
+    go.disabled = false; overlay.classList.remove("hidden"); return;
+  }
+
+  S("Étape 3/6 – Déchiffrement en mémoire…"); L("[3] openpgp.decrypt(passwords)");
+  let plain;
+  try{
+    const res = await openpgp.decrypt({ message: msg, passwords: [pw.value], format: "binary" });
+    plain = new Uint8Array(res.data);
+    enc.fill(0); // wipe du buffer chiffré
+    L(`[3] OK, clair=${plain.byteLength} octets`);
+  }catch(err){
+    const m = (""+err.message||"").toLowerCase();
+    const hint = m.includes("session key") || m.includes("wrong") || m.includes("passphrase")
+      ? "Mot de passe incorrect."
+      : "Échec déchiffrement (format ou mot de passe).";
+    S(hint); L(`[ERR-DEC] ${err.stack||err}`);
+    go.disabled = false; overlay.classList.remove("hidden"); return;
+  }
+
+  S("Étape 4/6 – Ouverture PDF en mémoire…"); L("[4] pdfjsLib.getDocument({data})");
+  let pdf;
+  try{
+    pdf = await pdfjsLib.getDocument({ data: plain, disableFontFace:true }).promise;
+    L(`[4] PDF pages: ${pdf.numPages}`);
+  }catch(err){
+    S("Le contenu déchiffré n'est pas un PDF lisible."); L(`[ERR-PDF] ${err.stack||err}`);
+    go.disabled = false; overlay.classList.remove("hidden"); return;
+  }
+
+  S("Étape 5/6 – Rendu de la 1ʳᵉ page…"); L("[5] page.render(canvas)");
+  try{
+    const page = await pdf.getPage(1);
+    const vp = page.getViewport({ scale: 1.5 });
+    const cv = $("#cv"); const ctx = cv.getContext("2d", { alpha:false });
+    cv.width = vp.width; cv.height = vp.height;
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  }catch(err){
+    S("Échec du rendu de la page PDF."); L(`[ERR-RENDER] ${err.stack||err}`);
+    go.disabled = false; overlay.classList.remove("hidden"); return;
+  }finally{
+    // efface le clair (réduit les traces)
+    try{ plain.fill(0); }catch{}
+  }
+
+  // Succès
+  $("#login").classList.add("hidden");
+  S(`Étape 6/6 – Affichage temporaire. Fermeture dans ${Math.round(CLOSE_MS/1000)} s…`);
+  L("[6] Compte à rebours lancé");
+  setTimeout(()=>{ L("[6] Timeout → fermeture"); hardClose(); }, CLOSE_MS);
 }
 
-// Déchiffrement
-btn.addEventListener('click', async ()=>{
-  btn.disabled = true;
-  S('Chargement du fichier chiffré...');
-  try {
-    const r = await fetch(GPG_URL, {cache:'no-store'});
-    if (!r.ok) throw Error('HTTP '+r.status);
-    S('Lecture du fichier...');
-    const enc = new Uint8Array(await r.arrayBuffer());
+/*** Note d’aide sur les erreurs fréquentes ***/
+L([
+  "Guide de diagnostic :",
+  "• HTTP 404/403 à l'étape [1] → chemin GPG_URL invalide ou fichier absent.",
+  "• ERR-PARSE à l'étape [2]   → le fichier n'est pas un paquet OpenPGP binaire valide.",
+  "• ERR-DEC à l'étape [3]     → mot de passe incorrect ou message incompatible.",
+  "• ERR-PDF à l'étape [4]     → le clair n'est pas un PDF valide.",
+  "• ERR-RENDER à l'étape [5]  → souci de rendu canvas/pdf.js.",
+].join("\n"));
 
-    S('Déchiffrement...');
-    const msg = await openpgp.readMessage({binaryMessage:enc});
-    const {data} = await openpgp.decrypt({message:msg,passwords:[pw.value],format:'binary'});
-    enc.fill(0);
-
-    S('Affichage PDF...');
-    const pdf = await pdfjsLib.getDocument({data:new Uint8Array(data),disableFontFace:true}).promise;
-    const page = await pdf.getPage(1);
-    const ctx = cv.getContext('2d',{alpha:false});
-    const vp = page.getViewport({scale:1.5});
-    cv.width = vp.width; cv.height = vp.height;
-    await page.render({canvasContext:ctx,viewport:vp}).promise;
-
-    S('Affichage temporaire. Fermeture automatique dans 15 s…');
-    document.getElementById('login').classList.add('hidden');
-    overlay.classList.add('hidden');
-
-    // Activer la protection APRES déchiffrement
-    activateProtection();
-
-    setTimeout(()=>{
-      try{ cv.width=1; cv.height=1; }catch(_){}
-      window.close(); location.replace('about:blank');
-    },15000);
-
-    // Détection très basique d’extensions
-    setTimeout(()=>{
-      if(window.chrome && window.chrome.runtime && window.chrome.runtime.sendMessage) {
-        blocker.textContent="Attention : Extension Chrome détectée !"; blocker.classList.remove('hidden'); setTimeout(()=>blocker.classList.add('hidden'),1800);
-      }
-      if(window.navigator.plugins && window.navigator.plugins.length > 0) {
-        for(const p of navigator.plugins) {
-          const n=(p.name||"").toLowerCase();
-          if(n.includes("screenshot")||n.includes("capture")) {blocker.textContent="Extension de capture détectée !";blocker.classList.remove('hidden'); setTimeout(()=>blocker.classList.add('hidden'),1800);}
-        }
-      }
-    },1000);
-
-  }catch(e){
-    S('Erreur : '+(e?.message||e));
-    console.error('Erreur complète:', e);
-    pw.value = ''; btn.disabled = true;
-    overlay.textContent = "Échec du déchiffrement";
-    overlay.classList.remove('hidden');
-  }
-});
+// Tant que pas déchiffré, on garde l'overlay visible
+// (il sera masqué au clic sur "Déchiffrer")
 </script>
 </body>
 </html>
