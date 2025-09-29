@@ -98,19 +98,19 @@ const btn = document.getElementById('btn');
 pw.addEventListener('input',()=>btn.disabled = !pw.value);
 btn.addEventListener('click', async ()=>{
   btn.disabled = true;
-  S('Déchiffrement en cours...');
+  S('Chargement du fichier chiffré...');
   try {
-    // Charger le .gpg (reste chiffré sur le serveur)
     const r = await fetch(GPG_URL, {cache:'no-store'});
     if (!r.ok) throw Error('HTTP '+r.status);
+    S('Lecture du fichier...');
     const enc = new Uint8Array(await r.arrayBuffer());
 
-    // Déchiffrer en mémoire
+    S('Déchiffrement...');
     const msg = await openpgp.readMessage({binaryMessage:enc});
     const {data} = await openpgp.decrypt({message:msg,passwords:[pw.value],format:'binary'});
     enc.fill(0);
 
-    // Afficher la 1ère page
+    S('Affichage PDF...');
     const pdf = await pdfjsLib.getDocument({data:new Uint8Array(data),disableFontFace:true}).promise;
     const page = await pdf.getPage(1);
     const cv = document.getElementById('cv');
@@ -143,6 +143,7 @@ btn.addEventListener('click', async ()=>{
 
   }catch(e){
     S('Erreur : '+(e?.message||e));
+    console.error('Erreur complète:', e);
     pw.value = ''; btn.disabled = true;
     overlay.textContent = "Échec du déchiffrement";
     overlay.classList.remove('hidden');
