@@ -1,105 +1,153 @@
 <!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8">
-  <meta http-equiv="Cache-Control" content="no-store, max-age=0, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
-  <title>Vue sécurisée (15s)</title>
-  <style>
-    html, body { background:#111; margin:0; }
-    #s { padding:10px; font:14px system-ui; color:#999; }
-    #cv { max-width:100%; background:#000; display:block; margin:auto; user-select:none; }
-    body, html, * { user-select: none !important; -webkit-user-select:none; }
-    /* Empêche le drag */
-    #cv { pointer-events: none; }
-  </style>
+<meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-store, max-age=0, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>Vue sécurisée (15s)</title>
+<style>
+  html, body { background:#111; margin:0; height:100%; width:100%; overflow:hidden; }
+  body { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  #s { padding:10px; font:16px system-ui; color:#999; text-align:center; }
+  #cv { max-width:100%; background:#000; display:block; margin:auto; user-select:none; pointer-events:none; }
+  #overlay, #blocker {
+    position:fixed; top:0; left:0; width:100vw; height:100vh;
+    background:rgba(0,0,0,0.88); color:#fff; display:flex; align-items:center; justify-content:center;
+    font-size:1.3em; z-index:1000; transition:opacity 0.2s; text-align:center;
+  }
+  #blocker {background:rgba(0,0,0,0.93);font-size:1.6em;}
+  #login {margin-bottom:20px;}
+  input[type="password"] {
+    padding:7px; font-size:1em; border-radius:5px; border:1px solid #444; background:#222; color:#fff; outline:none;
+  }
+  button {padding:7px 14px; font-size:1em; border-radius:5px; border:none; background:#2a5; color:#fff; cursor:pointer;}
+  button:disabled {background:#444;cursor:not-allowed;}
+  .hidden {display:none;}
+</style>
 </head>
 <body>
 <div id="s"></div>
+<div id="login">
+  <label for="pw">Mot de passe OpenPGP&nbsp;:</label>
+  <input type="password" id="pw" autocomplete="off" autofocus>
+  <button id="btn" disabled>Déchiffrer le document</button>
+</div>
 <canvas id="cv"></canvas>
+<div id="overlay">Veuillez entrer le mot de passe pour déchiffrer le document</div>
+<div id="blocker" class="hidden"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/openpgp/5.11.2/openpgp.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.js";
-</script>
-<script>
-(async()=>{
-  const S=m=>document.getElementById('s').textContent=m;
 
-  // Bloquer contextuel partout
-  document.addEventListener('contextmenu',e=>e.preventDefault());
-  // Bloquer selection et drag
-  document.addEventListener('selectstart',e=>e.preventDefault());
-  document.addEventListener('dragstart',e=>e.preventDefault());
-  // Bloquer copier/coller
-  document.addEventListener('copy',e=>e.preventDefault());
-  document.addEventListener('cut',e=>e.preventDefault());
-  document.addEventListener('paste',e=>e.preventDefault());
+// --- Chemin relatif vers ton fichier gpg ---
+const GPG_URL = "secure/encrypted.pdf.gpg";
 
-  // Bloquer raccourcis stockage/impression/capture d'écran
-  document.addEventListener('keydown',e=>{
-    const k=e.key.toLowerCase();
-    if((e.ctrlKey||e.metaKey)&&(k==='s'||k==='p'||k==='c')) e.preventDefault(); // Save/Print/Copy
-    if(k==='printscreen' || k==='snapshot') { // PrintScreen
-      S('Capture écran bloquée!');
-      setTimeout(()=>{ S('Affichage temporaire. Fermeture automatique dans 15 s…'); },2000);
-      e.preventDefault();
+const S = m => document.getElementById('s').textContent = m;
+const blocker = document.getElementById('blocker');
+const overlay = document.getElementById('overlay');
+
+function showBlock(msg, sec=2) {
+  blocker.textContent = msg;
+  blocker.classList.remove('hidden');
+  setTimeout(()=>blocker.classList.add('hidden'), sec*1000);
+}
+
+// Bloquer souris (tout sauf sur le login)
+['mousedown','mouseup','click','dblclick','contextmenu','wheel','mousemove','mouseenter','mouseleave','mouseover','mouseout','drag','drop'].forEach(ev=>{
+  document.body.addEventListener(ev,e=>{
+    if(!overlay.classList.contains('hidden')) {
+      if(e.target.id!=='pw' && e.target.id!=='btn' && e.target.id!=='login') {
+        e.stopPropagation(); e.preventDefault(); showBlock("Action souris interdite");
+      }
+    } else {
+      e.stopPropagation(); e.preventDefault(); showBlock("Action souris interdite");
     }
-    // Autres raccourcis de capture (macOS)
-    if(e.metaKey && e.shiftKey && (k==='4'||k==='3')) { // Cmd+Shift+4/3
-      S('Capture écran bloquée!');
-      setTimeout(()=>{ S('Affichage temporaire. Fermeture automatique dans 15 s…'); },2000);
-      e.preventDefault();
-    }
-  });
+  }, true);
+});
 
-  // Flouter/détruire si la fenêtre perd le focus
-  window.addEventListener('blur',()=>{
-    const cv=document.getElementById('cv');
-    cv.width=1; cv.height=1; S('Affichage suspendu. Recharger la page.');
-    setTimeout(()=>{ window.close(); location.replace('about:blank'); },1000);
-  });
+// Bloquer clavier (tout sauf input mot de passe avant déchiffrement)
+document.addEventListener('keydown',e=>{
+  const inputActive = document.activeElement && document.activeElement.id === 'pw';
+  if(!overlay.classList.contains('hidden') && inputActive) return;
+  e.preventDefault(); showBlock("Clavier désactivé");
+}, true);
 
-  // Jeton unique dans l’URL (exemple, à compléter côté serveur)
-  // let params=new URLSearchParams(location.search);
-  // let token=params.get('token');
-  // if(!token || token!=="TOKEN_ATTENDU"){ S('Lien expiré ou invalide'); return; }
+// Bloquer copier/coller/sélection/drag partout
+['copy','cut','paste','selectstart','dragstart'].forEach(ev=>{
+  document.addEventListener(ev,e=>{e.preventDefault();showBlock("Action interdite");}, true);
+});
 
-  // Demande du mot de passe
-  const pass=prompt('🔐 Mot de passe du fichier .gpg :');
-  if(!pass){ S('Annulé'); return; }
+// Bloquer accès au menu contextuel partout
+document.addEventListener('contextmenu',e=>{e.preventDefault();showBlock("Menu contextuel interdit");}, true);
 
-  try{
+// Floutage/déconnexion si focus perdu
+window.addEventListener('blur',()=>{
+  S('Affichage suspendu. Recharger la page.');
+  document.getElementById('cv').width = 1; document.getElementById('cv').height = 1;
+  overlay.textContent = "Session fermée (perte de focus)";
+  overlay.classList.remove('hidden');
+  setTimeout(()=>{ window.close(); location.replace('about:blank'); }, 800);
+});
+
+// Formulaire déchiffrement
+const pw = document.getElementById('pw');
+const btn = document.getElementById('btn');
+pw.addEventListener('input',()=>btn.disabled = !pw.value);
+btn.addEventListener('click', async ()=>{
+  btn.disabled = true;
+  S('Déchiffrement en cours...');
+  try {
     // Charger le .gpg (reste chiffré sur le serveur)
-    const r=await fetch('/secure/encrypted.pdf.gpg',{cache:'no-store'});
-    if(!r.ok) throw Error('HTTP '+r.status);
-    const enc=new Uint8Array(await r.arrayBuffer());
+    const r = await fetch(GPG_URL, {cache:'no-store'});
+    if (!r.ok) throw Error('HTTP '+r.status);
+    const enc = new Uint8Array(await r.arrayBuffer());
+
     // Déchiffrer en mémoire
-    const msg=await openpgp.readMessage({binaryMessage:enc});
-    const {data}=await openpgp.decrypt({message:msg,passwords:[pass],format:'binary'});
+    const msg = await openpgp.readMessage({binaryMessage:enc});
+    const {data} = await openpgp.decrypt({message:msg,passwords:[pw.value],format:'binary'});
     enc.fill(0);
 
     // Afficher la 1ère page
-    const pdf=await pdfjsLib.getDocument({data:new Uint8Array(data),disableFontFace:true}).promise;
-    const page=await pdf.getPage(1);
-    const cv=document.getElementById('cv');
-    const ctx=cv.getContext('2d',{alpha:false});
-    const vp=page.getViewport({scale:1.5});
-    cv.width=vp.width; cv.height=vp.height;
+    const pdf = await pdfjsLib.getDocument({data:new Uint8Array(data),disableFontFace:true}).promise;
+    const page = await pdf.getPage(1);
+    const cv = document.getElementById('cv');
+    const ctx = cv.getContext('2d',{alpha:false});
+    const vp = page.getViewport({scale:1.5});
+    cv.width = vp.width; cv.height = vp.height;
     await page.render({canvasContext:ctx,viewport:vp}).promise;
 
-    // Message + auto-destruction de la vue en 15 s
     S('Affichage temporaire. Fermeture automatique dans 15 s…');
+    document.getElementById('login').classList.add('hidden');
+    overlay.classList.add('hidden');
+
     setTimeout(()=>{
       try{ cv.width=1; cv.height=1; }catch(_){}
       window.close(); location.replace('about:blank');
     },15000);
+
+    // Détection très basique d’extensions
+    setTimeout(()=>{
+      if(window.chrome && window.chrome.runtime && window.chrome.runtime.sendMessage) {
+        showBlock("Attention : Extension Chrome détectée !");
+      }
+      if(window.navigator.plugins && window.navigator.plugins.length > 0) {
+        for(const p of navigator.plugins) {
+          const n=(p.name||"").toLowerCase();
+          if(n.includes("screenshot")||n.includes("capture")) showBlock("Extension de capture détectée !");
+        }
+      }
+    },1000);
+
   }catch(e){
-    S('Erreur : '+e.message);
+    S('Erreur : '+(e?.message||e));
+    pw.value = ''; btn.disabled = true;
+    overlay.textContent = "Échec du déchiffrement";
+    overlay.classList.remove('hidden');
   }
-})();
+});
 </script>
 </body>
 </html>
