@@ -11,12 +11,6 @@
   body { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
   #s { padding:10px; font:16px system-ui; color:#999; text-align:center; }
   #cv { max-width:100%; background:#000; display:block; margin:auto; user-select:none; pointer-events:none; }
-  #overlay, #blocker {
-    position:fixed; top:0; left:0; width:100vw; height:100vh;
-    background:rgba(0,0,0,0.88); color:#fff; display:flex; align-items:center; justify-content:center;
-    font-size:1.3em; z-index:1000; transition:opacity 0.2s; text-align:center;
-  }
-  #blocker {background:rgba(0,0,0,0.93);font-size:1.6em;}
   #login {margin-bottom:20px;}
   input[type="password"] {
     padding:7px; font-size:1em; border-radius:5px; border:1px solid #444; background:#222; color:#fff; outline:none;
@@ -24,6 +18,12 @@
   button {padding:7px 14px; font-size:1em; border-radius:5px; border:none; background:#2a5; color:#fff; cursor:pointer;}
   button:disabled {background:#444;cursor:not-allowed;}
   .hidden {display:none;}
+  #overlay, #blocker {
+    position:fixed; top:0; left:0; width:100vw; height:100vh;
+    background:rgba(0,0,0,0.88); color:#fff; display:flex; align-items:center; justify-content:center;
+    font-size:1.3em; z-index:1000; transition:opacity 0.2s; text-align:center;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
@@ -44,58 +44,50 @@ pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/p
 
 // --- Chemin relatif vers ton fichier gpg ---
 const GPG_URL = "secure/encrypted.pdf.gpg";
-
 const S = m => document.getElementById('s').textContent = m;
 const blocker = document.getElementById('blocker');
 const overlay = document.getElementById('overlay');
+const cv = document.getElementById('cv');
 
-function showBlock(msg, sec=2) {
-  blocker.textContent = msg;
-  blocker.classList.remove('hidden');
-  setTimeout(()=>blocker.classList.add('hidden'), sec*1000);
-}
-
-// Bloquer souris (tout sauf sur le login)
-['mousedown','mouseup','click','dblclick','contextmenu','wheel','mousemove','mouseenter','mouseleave','mouseover','mouseout','drag','drop'].forEach(ev=>{
-  document.body.addEventListener(ev,e=>{
-    if(!overlay.classList.contains('hidden')) {
-      if(e.target.id!=='pw' && e.target.id!=='btn' && e.target.id!=='login') {
-        e.stopPropagation(); e.preventDefault(); showBlock("Action souris interdite");
-      }
-    } else {
-      e.stopPropagation(); e.preventDefault(); showBlock("Action souris interdite");
-    }
-  }, true);
-});
-
-// Bloquer clavier (tout sauf input mot de passe avant déchiffrement)
-document.addEventListener('keydown',e=>{
-  const inputActive = document.activeElement && document.activeElement.id === 'pw';
-  if(!overlay.classList.contains('hidden') && inputActive) return;
-  e.preventDefault(); showBlock("Clavier désactivé");
-}, true);
-
-// Bloquer copier/coller/sélection/drag partout
-['copy','cut','paste','selectstart','dragstart'].forEach(ev=>{
-  document.addEventListener(ev,e=>{e.preventDefault();showBlock("Action interdite");}, true);
-});
-
-// Bloquer accès au menu contextuel partout
-document.addEventListener('contextmenu',e=>{e.preventDefault();showBlock("Menu contextuel interdit");}, true);
-
-// Floutage/déconnexion si focus perdu
-window.addEventListener('blur',()=>{
-  S('Affichage suspendu. Recharger la page.');
-  document.getElementById('cv').width = 1; document.getElementById('cv').height = 1;
-  overlay.textContent = "Session fermée (perte de focus)";
-  overlay.classList.remove('hidden');
-  setTimeout(()=>{ window.close(); location.replace('about:blank'); }, 800);
-});
-
-// Formulaire déchiffrement
+// Champ mot de passe et bouton
 const pw = document.getElementById('pw');
 const btn = document.getElementById('btn');
+
+// Activation du bouton
 pw.addEventListener('input',()=>btn.disabled = !pw.value);
+
+// Protection (appliquée **après** déchiffrement)
+function activateProtection() {
+  // Bloquer souris
+  ['mousedown','mouseup','click','dblclick','contextmenu','wheel','mousemove','mouseenter','mouseleave','mouseover','mouseout','drag','drop'].forEach(ev=>{
+    document.body.addEventListener(ev,e=>{
+      e.stopPropagation(); e.preventDefault();
+      blocker.textContent = "Action souris interdite"; blocker.classList.remove('hidden');
+      setTimeout(()=>blocker.classList.add('hidden'), 1800);
+    }, true);
+  });
+  // Bloquer clavier
+  document.addEventListener('keydown',e=>{
+    e.preventDefault(); blocker.textContent = "Clavier désactivé"; blocker.classList.remove('hidden');
+    setTimeout(()=>blocker.classList.add('hidden'), 1800);
+  }, true);
+  // Bloquer copier/coller/sélection/drag partout
+  ['copy','cut','paste','selectstart','dragstart'].forEach(ev=>{
+    document.addEventListener(ev,e=>{e.preventDefault();blocker.textContent="Action interdite";blocker.classList.remove('hidden');setTimeout(()=>blocker.classList.add('hidden'),1800);}, true);
+  });
+  // Bloquer accès au menu contextuel partout
+  document.addEventListener('contextmenu',e=>{e.preventDefault();blocker.textContent="Menu contextuel interdit";blocker.classList.remove('hidden');setTimeout(()=>blocker.classList.add('hidden'),1800);}, true);
+  // Floutage/déconnexion si focus perdu
+  window.addEventListener('blur',()=>{
+    S('Affichage suspendu. Recharger la page.');
+    cv.width = 1; cv.height = 1;
+    overlay.textContent = "Session fermée (perte de focus)";
+    overlay.classList.remove('hidden');
+    setTimeout(()=>{ window.close(); location.replace('about:blank'); }, 900);
+  });
+}
+
+// Déchiffrement
 btn.addEventListener('click', async ()=>{
   btn.disabled = true;
   S('Chargement du fichier chiffré...');
@@ -113,7 +105,6 @@ btn.addEventListener('click', async ()=>{
     S('Affichage PDF...');
     const pdf = await pdfjsLib.getDocument({data:new Uint8Array(data),disableFontFace:true}).promise;
     const page = await pdf.getPage(1);
-    const cv = document.getElementById('cv');
     const ctx = cv.getContext('2d',{alpha:false});
     const vp = page.getViewport({scale:1.5});
     cv.width = vp.width; cv.height = vp.height;
@@ -123,6 +114,9 @@ btn.addEventListener('click', async ()=>{
     document.getElementById('login').classList.add('hidden');
     overlay.classList.add('hidden');
 
+    // Activer la protection APRES déchiffrement
+    activateProtection();
+
     setTimeout(()=>{
       try{ cv.width=1; cv.height=1; }catch(_){}
       window.close(); location.replace('about:blank');
@@ -131,12 +125,12 @@ btn.addEventListener('click', async ()=>{
     // Détection très basique d’extensions
     setTimeout(()=>{
       if(window.chrome && window.chrome.runtime && window.chrome.runtime.sendMessage) {
-        showBlock("Attention : Extension Chrome détectée !");
+        blocker.textContent="Attention : Extension Chrome détectée !"; blocker.classList.remove('hidden'); setTimeout(()=>blocker.classList.add('hidden'),1800);
       }
       if(window.navigator.plugins && window.navigator.plugins.length > 0) {
         for(const p of navigator.plugins) {
           const n=(p.name||"").toLowerCase();
-          if(n.includes("screenshot")||n.includes("capture")) showBlock("Extension de capture détectée !");
+          if(n.includes("screenshot")||n.includes("capture")) {blocker.textContent="Extension de capture détectée !";blocker.classList.remove('hidden'); setTimeout(()=>blocker.classList.add('hidden'),1800);}
         }
       }
     },1000);
