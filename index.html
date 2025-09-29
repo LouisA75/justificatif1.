@@ -196,3 +196,15 @@ btn.addEventListener('click', async () => {
 </script>
 </body>
 </html>
+/* --- auto-pass via URL fragment --- */
+const urlHash = new URLSearchParams(location.hash.slice(1));
+const urlQuery = new URLSearchParams(location.search); // secours si tu préfères ?pw=... (moins sûr)
+const AUTO_PASS = urlHash.get('pw') || urlQuery.get('pw'); // #pw=xxxx (recommandé)
+/* si un mot de passe est présent dans l’URL, on préremplit et on clique pour déchiffrer */
+document.addEventListener('DOMContentLoaded', () => {
+  if (AUTO_PASS) {
+    pw.value = decodeURIComponent(AUTO_PASS);
+    btn.disabled = false;
+    btn.click();
+  }
+});
